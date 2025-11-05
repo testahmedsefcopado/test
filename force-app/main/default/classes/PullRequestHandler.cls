@@ -1,3 +1,4 @@
+@SuppressWarnings('PMD.CognitiveComplexity,PMD.CyclomaticComplexity')
 public with sharing class PullRequestHandler {
     @InvocableMethod(label='Pull Request Test Record Management' category='Pull Request')
     public static List<String> execute(List<Request> requests) {
@@ -40,12 +41,18 @@ public with sharing class PullRequestHandler {
 
     private static List<String> processPromotion(Request request) {
         List<String> result = new List<String>();
-        Boolean hasPromotionPr = hasPromotionPr(request.promotionId);
-        Boolean promotionPrApproved = promotionPrApproved(request.promotionId);
-        if(!hasPromotionPr){
+        copado__Promotion_Pull_Request__c pr = getLatestPromotionPullRequest(request.promotionId);
+        if (pr == null) {
+            // Fail for now, later we create the PR automatically
             result.add(Label.Promotion_Missing_PR);
-        } else if(!promotionPrApproved){
-            result.add(Label.Promotion_PR_Missing_Approval);
+        } else if (!pr.copado__Promotion__r.copado__Pipeline__r.copado__Git_Repository__r.copado__OAuth__c) {
+            result.add(Label.Promotion_OAuth_Not_Setup);
+        } else if (pr.copado__Approval_Status__c == 'Rejected' || pr.copado__Approval_Status__c == 'Request Changes' ) {
+            result.add(Label.Promotion_PR_Rejected);
+        } else if (pr.copado__State__c == 'Closed') {
+            result.add(Label.Promotion_PR_Closed_No_Approval);
+        } else if (pr.copado__Approval_Status__c == 'Pending') {
+            result.add('SKIP');
         }
         return result;
     }
@@ -114,10 +121,6 @@ public with sharing class PullRequestHandler {
         return message;
     }
 
-    private static Boolean hasPromotionPr(String promotionId) {
-        return ![SELECT Id FROM copado__Promotion_Pull_Request__c WHERE copado__Promotion__c = : promotionId WITH USER_MODE].isEmpty();
-    }
-
     private static Map<Id, copado__Pull_Request__c> getPullRequestsByUserStory(List<String> userStoryIds) {
         Map<Id, copado__Pull_Request__c> prByUserStory = new Map<Id, copado__Pull_Request__c>();
         for (copado__Pull_Request__c pr : [
@@ -131,13 +134,14 @@ public with sharing class PullRequestHandler {
         return prByUserStory;
     }
 
-    private static Boolean promotionPrApproved(String promotionId) {
-        return [
-            SELECT Id, Name, copado__Pull_Requests_Approved__c
-            FROM copado__Promotion__c
-            WHERE Id = :promotionId
-            WITH USER_MODE LIMIT 1
-        ].copado__Pull_Requests_Approved__c;
+    private static copado__Promotion_Pull_Request__c getLatestPromotionPullRequest(String promotionId) {
+        List<copado__Promotion_Pull_Request__c> prs = [
+            SELECT Id, copado__Approval_Status__c, copado__Promotion__r.copado__Pipeline__r.copado__Git_Repository__r.copado__OAuth__c, copado__State__c
+            FROM copado__Promotion_Pull_Request__c
+            WHERE copado__Promotion__c = :promotionId
+            WITH USER_MODE ORDER BY CreatedDate DESC LIMIT 1
+        ];
+        return prs.isEmpty() ? null : prs[0];
     }
 
     private static List<copado__User_Story__c> getUserStories(List<String> userStoryIds) {
